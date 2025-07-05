@@ -3,6 +3,8 @@ import glob
 import pandas as pd
 import argparse
 from importlib.machinery import SourceFileLoader
+from mt5_fetch.get_price_CSV import fetch_price_csv
+from feature.add_features import add_features
 
 # コマンドライン引数の定義
 parser = argparse.ArgumentParser(
@@ -44,15 +46,13 @@ should_enter_trade = trade_logic.should_enter_trade
 
 # ステップ1: データ取得
 print(f"▶ Fetching {target_bars} bars for {symbol}_{frame}...")
-os.system(
-    f"python ./mt5_fetch/get_price_CSV.py --symbol {symbol} --timeframe {frame} --bars {target_bars}"
-)
+csv_path = fetch_price_csv(symbol, frame, target_bars, out_dir="data")
+print(f"✅ Fetched: {csv_path}")
 
 # ステップ2: 特徴量生成
 print("▶ Generating features...")
-os.system(
-    f"python ./feature/add_features.py --symbol {symbol} --timeframe {frame}"
-)
+csv_path = add_features(symbol, frame, in_dir="data", out_dir="data")
+print(f"✅ Generated features at {csv_path}")
 
 if args.mode == 'train':
     # ステップ3: モデル再学習
@@ -60,6 +60,7 @@ if args.mode == 'train':
     os.system(
         f"python ./model/train_model.py --symbol {symbol} --timeframe {frame} --atr-multiplier 0.5 --train-bars {args.train_bars}"
     )
+    init_model(model_path)
     print("✅ Model training completed")
 else:
     # ステップ3: 最新データで予測判定
