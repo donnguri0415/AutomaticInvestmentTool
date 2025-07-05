@@ -1,7 +1,7 @@
 import os
 import pandas as pd
 import joblib
-from tools.compute_tp_sl import get_tp_sl
+import time
 
 # 特徴量列（モデルと一致させる）
 feature_cols = [
@@ -39,11 +39,12 @@ def should_enter_trade(latest_row: pd.Series,
     """
     global _MODEL
     # 初回またはリロード時にモデルパスが与えられればロード
+    t0 = time.perf_counter() # debug
     if _MODEL is None:
         if model_path is None:
             raise RuntimeError("Model not initialized: call init_model() with model_path first.")
         init_model(model_path)
-
+    t1 = time.perf_counter() # debug
     # モデルファイル名からsymbolとtimeframeを抽出（TP/SL計算用）
     fname = os.path.basename(model_path) if model_path else ''
     name, _ = os.path.splitext(fname)
@@ -52,19 +53,17 @@ def should_enter_trade(latest_row: pd.Series,
         raise ValueError(f"Cannot parse symbol/timeframe from model filename: {fname}")
     symbol, timeframe = parts[-2], parts[-1]
 
-    # 動的TP/SL計算
-    tp, sl = get_tp_sl(symbol, timeframe, indir=indir, percentile=percentile)
-
     # 特徴量配列を整形して予測
     X_latest = latest_row[feature_cols].values.reshape(1, -1)
     proba = _MODEL.predict_proba(X_latest)[0]
+    print(f"[PROFILE] init_model={(t1-t0):.3f}s") #debug
     prob_buy, prob_sell = proba[1], proba[0]
 
     # エントリーロジック
     if prob_buy > threshold:
-        return {"enter": True,  "direction": "buy",  "probability": prob_buy,  "tp": tp, "sl": sl}
+        return {"enter": True,  "direction": "buy",  "probability": prob_buy}
     elif prob_sell > threshold:
-        return {"enter": True,  "direction": "sell", "probability": prob_sell, "tp": tp, "sl": sl}
+        return {"enter": True,  "direction": "sell", "probability": prob_sell}
     else:
         return {"enter": False, "direction": None,   "probability": max(prob_buy, prob_sell), "tp": None, "sl": None}
 

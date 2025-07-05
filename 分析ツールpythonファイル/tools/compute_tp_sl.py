@@ -22,52 +22,37 @@ def get_pip_multiplier(symbol: str) -> float:
     return 0.0001
 
 
-def get_tp_sl(symbol: str, timeframe: str, indir: str = 'data', percentile: float = 75.0):
+def get_tp_sl_from_df(feat_df: pd.DataFrame,
+                      symbol: str,
+                      percentile: float = 100.0) -> tuple[float, float]:
     """
-    指定のCSVからヒストリカルリターン分布を計算し、TP/SLを返す関数
-    :param symbol: str 通貨ペアまたは資産名（例: EURUSDm）
-    :param timeframe: str 時間足（例: M15）
-    :param indir: str CSV格納ディレクトリ
-    :param percentile: float パーセンタイル
-    :return: tuple (tp, sl) 価格単位
+    現在の特徴量 DataFrame を基に TP/SL を計算して返す
+
+    :param feat_df: pandas.DataFrame 特徴量を含むデータフレーム（'close' 列必須）
+    :param symbol: str 通貨ペア名など
+    :param percentile: float パーセンタイル（0-100）
+    :return: (tp, sl) 価格単位
     """
-    file_path = os.path.join(indir, f"{symbol}_{timeframe}_features_v2.csv")
-    df = pd.read_csv(file_path, parse_dates=['time'], index_col='time')
-
-    # リターン計算
-    df['ret'] = df['close'].shift(-1) - df['close']
-    df.dropna(subset=['ret'], inplace=True)
-
+    # リターンを計算
+    close = feat_df['close'].values
     pip_mult = get_pip_multiplier(symbol)
-    df['ret_pips'] = df['ret'] / pip_mult
+    # 次足との差分（最後の行は NaN）
+    ret = np.empty_like(close)
+    ret[:-1] = close[1:] - close[:-1]
+    ret[-1] = np.nan
 
-    pos = df.loc[df['ret_pips'] > 0, 'ret_pips']
-    neg = df.loc[df['ret_pips'] < 0, 'ret_pips'].abs()
+    ret_pips = ret / pip_mult
+    # 正負に分ける
+    pos = ret_pips[:-1][ret_pips[:-1] > 0]
+    neg = np.abs(ret_pips[:-1][ret_pips[:-1] < 0])
 
-    if pos.empty or neg.empty:
+    if pos.size == 0 or neg.size == 0:
         raise ValueError("データ不足: 上昇または下落のサンプルがありません。")
 
+    # パーセンタイル計算
     tp_pips = np.percentile(pos, percentile)
     sl_pips = np.percentile(neg, percentile)
 
-    tp = tp_pips * pip_mult
-    sl = sl_pips * pip_mult
-    return tp, sl
+    # pips→価格単位
+    return float(tp_pips * pip_mult), float(sl_pips * pip_mult)
 
-
-def main():
-    parser = argparse.ArgumentParser(
-        description="ヒストリカルリターン分布からTP/SLを自動設定するスクリプト"
-    )
-    parser.add_argument('--symbol', type=str, default='EURUSDm', help='通貨ペアまたは資産名')
-    parser.add_argument('--timeframe', type=str, default='M15', help='時間足')
-    parser.add_argument('--indir', type=str, default='data', help='特徴量CSVのディレクトリ')
-    parser.add_argument('--percentile', type=float, default=75.0, help='パーセンタイル')
-    args = parser.parse_args()
-
-    tp, sl = get_tp_sl(args.symbol, args.timeframe.upper(), args.indir, args.percentile)
-    print(f"✅ {args.symbol} {args.timeframe} の推奨TP: {tp:.5f}, 推奨SL: {sl:.5f}")
-    print(f"(約 {tp/get_pip_multiplier(args.symbol):.2f} pips / {sl/get_pip_multiplier(args.symbol):.2f} pips)")
-
-if __name__ == '__main__':
-    main()

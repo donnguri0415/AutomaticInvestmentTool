@@ -4,8 +4,10 @@ import pandas as pd
 import argparse
 import yaml  # pyyaml required
 from importlib.machinery import SourceFileLoader
-from mt5_fetch.get_price_CSV import fetch_price_csv
-from feature.add_features import add_features
+from mt5_fetch.get_price_data import fetch_price_df
+from feature.add_features_df import add_features_df
+import time
+t0 = time.perf_counter()
 
 # --- コマンドライン引数の定義 ---
 parser = argparse.ArgumentParser(
@@ -73,13 +75,15 @@ model_path = f"model/model_lgbm_best_{symbol}_{frame}.pkl"
 
 # --- ステップ1: データ取得 ---
 print(f"▶ Fetching {target_bars} bars for {symbol}_{frame}...")
-csv_path = fetch_price_csv(symbol, frame, target_bars, out_dir="data")
-print(f"✅ Fetched: {csv_path}")
+ohlcv_df   = fetch_price_df(symbol, frame, target_bars)
+print("✅ Fetched")
+t1 = time.perf_counter()
 
 # --- ステップ2: 特徴量生成 ---
 print("▶ Generating features...")
-csv_path = add_features(symbol, frame, in_dir="data", out_dir="data")
-print(f"✅ Generated features at {csv_path}")
+feat_df    = add_features_df(ohlcv_df)
+print("✅ Generated features")
+t2 = time.perf_counter()
 
 if args.mode == 'train':
     # --- ステップ3: モデル再学習 ---
@@ -92,19 +96,18 @@ if args.mode == 'train':
 else:
     # --- ステップ3: 最新データで予測判定 ---
     print("▶ Predicting on latest bar...")
-    init_model(model_path)
-    df = pd.read_csv(
-        f"data/{symbol}_{frame}_features_v2.csv",
-        index_col='time', parse_dates=True
-    )
-    latest = df.iloc[-1]
+    latest = feat_df.iloc[-1]
+    t3     = time.perf_counter()
     # NOTE: Pass model_path to ensure parsing
+    pred_start = time.perf_counter()
     decision = should_enter_trade(latest, model_path=model_path)
+    pred_end   = time.perf_counter()
 
     print("\n📢 [最終トレード判断]")
     if decision.get('enter'):
         print(f"▶ エントリー: {decision['direction']} (確率: {decision['probability']:.2%})")
         out_path = os.path.join(base_dir, f"predict_result_batch_{symbol}.csv")
+        sig_start = time.perf_counter()
         signal = pd.DataFrame([[
             pd.Timestamp.now().strftime("%Y-%m-%d %H:%M:%S"),
             1,
@@ -114,6 +117,12 @@ else:
             decision['sl']
         ]])
         signal.to_csv(out_path, index=False, header=False)
+        sig_end = time.perf_counter()
         print(f"✅ Signal written to: {out_path}")
+        print(
+	        f"[TIMING] fetch={(t1-t0):.3f}s | feat={(t2-t1):.3f}s | load={(t3-t2):.3f}s "
+	        f"| predict={(pred_end-pred_start):.3f}s "
+	        f"| write={(sig_end-sig_start):.3f}s → {decision}"
+)
     else:
         print(f"▶ ノーエントリー (確率: {decision['probability']:.2%})")
