@@ -1,61 +1,102 @@
 import os
+import glob
 import pandas as pd
-from importlib.machinery import SourceFileLoader
 import argparse
-from predict.trade_decision_logic import should_enter_trade
+from importlib.machinery import SourceFileLoader
 
 # コマンドライン引数の定義
-parser = argparse.ArgumentParser(description="MT5からチャートデータを取得してCSVに保存するスクリプト")
-parser.add_argument('--symbol',    type=str, default='EURUSDm',
-                    help='通貨ペアを指定（例: EURUSDm）')
-parser.add_argument('--timeframe', type=str, default='M15',
-                    choices=['M1','M5','M15','M30','H1','H4','D1','W1','MN1'],
-                    help='時間足を指定（例: M15, H1）')
-parser.add_argument('--bars',      type=int, default=9000,
-                    help='取得するバーの本数')
+parser = argparse.ArgumentParser(
+    description="MT5からチャートデータを取得／特徴量生成／予測 or モデル再学習を行うスクリプト"
+)
+parser.add_argument(
+    '--mode', choices=['predict','train'], default='predict',
+    help='実行モードを指定: predict=予測, train=モデル再学習'
+)
+parser.add_argument(
+    '--symbol', type=str, default='EURUSDm',
+    help='通貨ペアを指定（例: EURUSDm）'
+)
+parser.add_argument(
+    '--timeframe', type=str, default='M15',
+    choices=['M1','M5','M15','M30','H1','H4','D1','W1','MN1'],
+    help='時間足を指定（例: M15, H1）'
+)
+parser.add_argument(
+    '--bars', type=int, default=3000,
+    help='予測モード時に取得するバー本数'
+)
+parser.add_argument(
+    '--train-bars', type=int, default=100000,
+    help='再学習モード時に取得するバー本数'
+)
 args = parser.parse_args()
 
-# パラメータ各種
-symbol = "ETHUSDm"
-timeframe = "H1"
-bars = 3000
-#bars = 100000 # モデルの再学習用。週に1回実行をお願いします。
+symbol = args.symbol
+frame = args.timeframe
+target_bars = args.train_bars if args.mode == 'train' else args.bars
 
-# trade_decision_logic.py を predict フォルダから読み込み
-trade_logic = SourceFileLoader("trade_decision_logic_v2", "./predict/trade_decision_logic_v2.py").load_module()
+# trade_decision_logic_v2 をロード
+trade_logic = SourceFileLoader(
+    'trade_decision_logic_v2',
+    os.path.join('predict','trade_decision_logic_v2.py')
+).load_module()
 should_enter_trade = trade_logic.should_enter_trade
 
 # ステップ1: データ取得
-os.system(f"python ./mt5_fetch/get_price_CSV.py --symbol {symbol} --timeframe {timeframe} --bars {bars}")
+print(f"▶ Fetching {target_bars} bars for {symbol}_{frame}...")
+os.system(
+    f"python ./mt5_fetch/get_price_CSV.py --symbol {symbol} --timeframe {frame} --bars {target_bars}"
+)
 
 # ステップ2: 特徴量生成
-os.system(f"python ./feature/add_features.py --symbol {symbol} --timeframe {timeframe}")
+print("▶ Generating features...")
+os.system(
+    f"python ./feature/add_features.py --symbol {symbol} --timeframe {frame}"
+)
 
-# ステップ3: モデル再学習（必要に応じて）
-#os.system(f"python ./model/train_model.py --symbol {symbol} --timeframe {timeframe} --atr-multiplier 0.5")
-
-# ステップ4: 最新データで判断
-df = pd.read_csv(f"./data/{symbol}_{timeframe}_features_v2.csv", index_col="time", parse_dates=True)
-latest = df.iloc[-1]
-decision = should_enter_trade(latest, model_path=f"./model/model_lgbm_best_{symbol}_{timeframe}.pkl")
-
-# ログ表示
-print("\n📢 [最終トレード判断]")
-if decision["enter"]:
-    print(f"▶ エントリー: {decision['direction']}（確率: {decision['probability']:.2%}）")
-
-    # === ここから追記 ===
-    # 出力先：MT5の Files フォルダに配置される trade_signal.csv
-    signal_df = pd.DataFrame([[
-        pd.Timestamp.now().strftime("%Y-%m-%d %H:%M:%S"),  # 今の時刻を記録（調整可能）
-        1,
-        decision["direction"],
-        decision["probability"],
-        decision["tp"],
-        decision["sl"]
-    ]])
-    signal_df.to_csv(f"C:/Users/shang/AppData/Roaming/MetaQuotes/Terminal/A406065E6692A69B94B3E1F7E133A6B2/MQL5/Files/predict_result_batch_{symbol}.csv", index=False, header=False)
-    print("✅ predict_result_batch.csv 出力完了")
+if args.mode == 'train':
+    # ステップ3: モデル再学習
+    print("▶ Training model...")
+    os.system(
+        f"python ./model/train_model.py --symbol {symbol} --timeframe {frame} --atr-multiplier 0.5 --train-bars {args.train_bars}"
+    )
+    print("✅ Model training completed")
 else:
-    print(f"▶ ノーエントリー（確率: {decision['probability']:.2%}）")
-
+    # ステップ3: 最新データで予測判定
+    print("▶ Predicting on latest bar...")
+    df = pd.read_csv(
+        f"./data/{symbol}_{frame}_features_v2.csv",
+        index_col='time', parse_dates=True
+    )
+    latest = df.iloc[-1]
+    decision = should_enter_trade(
+        latest,
+        model_path=f"./model/model_lgbm_best_{symbol}_{frame}.pkl"
+    )
+    print("\n📢 [最終トレード判断]")
+    if decision.get("enter"):
+        print(f"▶ エントリー: {decision['direction']} (確率: {decision['probability']:.2%})")
+        # EA Files フォルダへの出力パスを自動検出
+        base_dir = os.path.expanduser("~/.wine/drive_c/Users/$USER/AppData/Roaming/MetaQuotes/Terminal")
+        # Windows 環境では ~ expands to C:/Users/<user>
+        base_dir = os.path.expanduser("~/AppData/Roaming/MetaQuotes/Terminal")
+        files_dirs = glob.glob(os.path.join(base_dir, '*', 'MQL5', 'Files'))
+        if files_dirs:
+            out_dir = files_dirs[0]
+        else:
+            # 直接パスがない場合は作成
+            out_dir = os.path.join(base_dir, 'MQL5', 'Files')
+            os.makedirs(out_dir, exist_ok=True)
+        out_path = os.path.join(out_dir, f"predict_result_batch_{symbol}.csv")
+        signal = pd.DataFrame([[
+            pd.Timestamp.now().strftime("%Y-%m-%d %H:%M:%S"),
+            1,
+            decision['direction'],
+            decision['probability'],
+            decision['tp'],
+            decision['sl']
+        ]])
+        signal.to_csv(out_path, index=False, header=False)
+        print(f"✅ Signal written to: {out_path}")
+    else:
+        print(f"▶ ノーエントリー (確率: {decision['probability']:.2%})")
