@@ -22,6 +22,7 @@ SYMBOL        = cfg.get('symbol', 'EURUSDm')
 TIMEFRAME     = cfg.get('timeframe', 'M15')
 PREDICT_INT   = cfg.get('predict_interval', 1)     # 秒
 TRAIN_TIME    = cfg.get('train_time', '06:00')
+TERMINAL_GUID = cfg.get('terminal_guid', None)
 
 # main.py 呼び出し用コマンドベース
 def call_main(mode):
