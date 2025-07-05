@@ -1,0 +1,6 @@
+symbol: ETHUSDm         # 通貨ペア
+timeframe: H1           # 時間足
+predict_interval: 1     # 秒
+train_time: "06:00"     # HH:MM フォーマット
+bars: 3000              # 予測時に取得するバーの数
+train_bars: 100000      # モデル再学習時に取得するバーの数

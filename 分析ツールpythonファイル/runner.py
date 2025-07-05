@@ -1,50 +1,67 @@
+import os
+import glob
+import pandas as pd
+import argparse
+import yaml
 import schedule
 import time
 import subprocess
 from datetime import datetime
 
-# --- 設定 ---
-SYMBOL    = "ETHUSDm"  # ここで通貨ペアを設定
-TIMEFRAME = "H1"       # ここで時間足を設定（例: M15, H1 など）
+# 設定ファイル読み込み
+parser = argparse.ArgumentParser(
+    description="予測・再学習スケジューラ"
+)
+parser.add_argument('--config', type=str, default='config.yaml', help='設定ファイルパス')
+args = parser.parse_args()
 
-# 1秒ごとの予測と、毎日06:00のモデル再学習をスケジュール
+with open(args.config, 'r', encoding='utf-8') as f:
+    cfg = yaml.safe_load(f)
 
+SYMBOL        = cfg.get('symbol', 'EURUSDm')
+TIMEFRAME     = cfg.get('timeframe', 'M15')
+PREDICT_INT   = cfg.get('predict_interval', 1)     # 秒
+TRAIN_TIME    = cfg.get('train_time', '06:00')
+
+# main.py 呼び出し用コマンドベース
+def call_main(mode):
+    cmd = [
+        'python', 'main.py',
+        '--mode', mode,
+        '--symbol', SYMBOL,
+        '--timeframe', TIMEFRAME
+    ]
+    if mode == 'predict':
+        cmd += ['--bars', str(cfg.get('bars', 3000))]
+    else:
+        cmd += ['--train-bars', str(cfg.get('train_bars', 100000))]
+    return cmd
+
+# 予測ジョブ
 def run_predict():
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    print(f"🔁 {now} - Predict start (symbol={SYMBOL}, timeframe={TIMEFRAME})")
+    print(f"🔁 {now} - Predict start ({SYMBOL}, {TIMEFRAME})")
     try:
-        cmd = [
-            "python", "main.py",
-            "--mode", "predict",
-            "--symbol", SYMBOL,
-            "--timeframe", TIMEFRAME
-        ]
-        subprocess.run(cmd, check=True)
+        subprocess.run(call_main('predict'), check=True)
         print(f"✅ {now} - Predict done\n")
     except subprocess.CalledProcessError as e:
         print(f"❌ {now} - Predict error: {e}\n")
 
-
+# 再学習ジョブ
 def run_train():
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    print(f"🔄 {now} - Train start")
+    print(f"🔄 {now} - Train start ({SYMBOL}, {TIMEFRAME})")
     try:
-        cmd = [
-            "python", "main.py",
-            "--mode", "train",
-            "--symbol", SYMBOL,
-            "--timeframe", TIMEFRAME
-        ]
-        subprocess.run(cmd, check=True)
+        subprocess.run(call_main('train'), check=True)
         print(f"✅ {now} - Train done\n")
     except subprocess.CalledProcessError as e:
         print(f"❌ {now} - Train error: {e}\n")
 
 # スケジュール設定
-schedule.every(1).seconds.do(run_predict)
-schedule.every().day.at("06:00").do(run_train)
+schedule.every(PREDICT_INT).seconds.do(run_predict)
+schedule.every().day.at(TRAIN_TIME).do(run_train)
 
-print(f"📌 Scheduler started: Predict every 1s for {SYMBOL}_{TIMEFRAME}, Train daily at 06:00")
+print(f"📌 Scheduler started: Predict every {PREDICT_INT}s for {SYMBOL}_{TIMEFRAME}, Train daily at {TRAIN_TIME}")
 
 while True:
     schedule.run_pending()
